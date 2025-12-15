@@ -90,19 +90,3 @@ class StructRetrieval:
         
         final_scores.sort(key=lambda x: x[1])
         return final_scores[:5]
-        """
-        混合搜尋：同時考慮敘事節奏與社會結構
-        """
-        narrative_res = dict(self.search_by_narrative(query_id, top_k=1223)) # 全搜
-        topo_res = dict(self.search_by_topology(query_id, top_k=1223))
-        
-        # 簡單的 Rank Aggregation (或分數加權)
-        final_scores = []
-        for mid in narrative_res:
-            if mid in topo_res:
-                # 這裡需要對分數做標準化(Normalization)才能加權，這裡僅為示意
-                score = alpha * narrative_res[mid] + (1-alpha) * topo_res[mid]
-                final_scores.append((mid, score))
-        
-        final_scores.sort(key=lambda x: x[1])
-        return final_scores[:5]
