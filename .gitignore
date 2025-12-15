@@ -1,5 +1,37 @@
-/data
-*.pyc
+# Python
 __pycache__/
-.DS_Store
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
 .venv/
+venv/
+ENV/
+
+# Data files (too large for git)
+data/scripts/
+data/parsed/
+data/movies.json
+data/features_cache.pkl
+*.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+progress.json
+
+# Output files
+*.png
