@@ -26,36 +26,61 @@ class FeatureExtractor:
         從 scenes 生成平滑的情感曲線，並歸一化為固定長度以便儲存。
         """
         scenes = data.get('scenes', [])
+        # 如果完全沒有場景，回傳全 0
         if not scenes:
             return np.zeros(target_length)
 
         # 1. 計算每個場景的情感分數
         raw_scores = []
         for scene in scenes:
-            # 優先使用場景完整文本，若無則聚合對話
             text = scene.get('text', "")
             if not text and 'dialogues' in scene:
                 text = " ".join([d['text'] for d in scene['dialogues']])
             
-            score = self.analyzer.polarity_scores(text)['compound']
-            raw_scores.append(score)
+            # 若場景全空，給 0 分
+            if not text.strip():
+                raw_scores.append(0.0)
+            else:
+                score = self.analyzer.polarity_scores(text)['compound']
+                raw_scores.append(score)
         
-        # 2. 處理過短的電影
-        if len(raw_scores) < 4: 
-            # 場景太少無法做 Savitzky-Golay，直接線性插值
-            y = np.array(raw_scores)
-        else:
-            # 3. Savitzky-Golay 平滑濾波 (去除高頻雜訊，保留敘事趨勢)
-            # window_length 必須小於數據長度且為奇數
-            window = min(len(raw_scores) if len(raw_scores) % 2 == 1 else len(raw_scores)-1, 11)
-            y = savgol_filter(raw_scores, window_length=window, polyorder=3)
+        y = np.array(raw_scores)
+        
+        # 2. 安全的平滑處理 (Safe Smoothing)
+        # Savitzky-Golay 限制: window_length > polyorder
+        # 這裡 polyorder=3，所以 window 至少要 5 (因為要是奇數)
+        if len(y) >= 5:
+            try:
+                # 決定視窗大小：最大 11，若資料長度小於 11 則取資料長度
+                window = min(len(y), 11)
+                
+                # 強制轉為奇數 (如果是偶數就減 1)
+                if window % 2 == 0:
+                    window -= 1
+                
+                # 再次檢查是否大於 polyorder (3)
+                if window > 3:
+                    y = savgol_filter(y, window_length=window, polyorder=3)
+            except Exception:
+                # 如果 SciPy 還是因為邊界問題報錯，就默默吞掉錯誤，使用原始數據 y
+                pass
 
-        # 4. 長度歸一化 (Interpolation) -> 讓所有電影都在 0% - 100% 的進度條上比較
+        # 3. 處理極端情況：如果數據點只有 1 個，無法插值
+        if len(y) < 2:
+            # 直接填滿整個長度
+            val = y[0] if len(y) == 1 else 0.0
+            return np.full(target_length, val)
+
+        # 4. 長度歸一化 (Interpolation)
         x_old = np.linspace(0, 1, len(y))
         x_new = np.linspace(0, 1, target_length)
-        f = interp1d(x_old, y, kind='cubic')
-        return f(x_new)
-
+        
+        try:
+            f = interp1d(x_old, y, kind='linear') # 改用 linear 比較穩，cubic 在點少時會震盪
+            return f(x_new)
+        except Exception:
+            return np.zeros(target_length)
+        
     # --- 社會拓撲學：NetLSD ---
     def compute_netlsd_signature(self, data):
         """

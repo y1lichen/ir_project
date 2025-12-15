@@ -51,6 +51,46 @@ class StructRetrieval:
 
     def hybrid_search(self, query_id, alpha=0.5):
         """
+        混合搜尋：使用 Min-Max Normalization 解決尺度不平衡問題
+        """
+        # 1. 獲取所有電影的單項距離
+        narrative_res = self.search_by_narrative(query_id, top_k=len(self.db))
+        topo_res = self.search_by_topology(query_id, top_k=len(self.db))
+        
+        # 轉成字典以便查詢 {mid: score}
+        dict_narr = dict(narrative_res)
+        dict_topo = dict(topo_res)
+        
+        # 2. 提取分數陣列用於計算統計量
+        scores_narr = np.array(list(dict_narr.values()))
+        scores_topo = np.array(list(dict_topo.values()))
+        
+        # 3. 定義標準化函數 (Min-Max Scaling)
+        # 將分數映射到 [0, 1]，0 代表最相似 (距離最小)，1 代表最不相似
+        def normalize(score, min_val, max_val):
+            if max_val - min_val == 0: return 0
+            return (score - min_val) / (max_val - min_val)
+
+        min_n, max_n = scores_narr.min(), scores_narr.max()
+        min_t, max_t = scores_topo.min(), scores_topo.max()
+
+        final_scores = []
+        
+        # 4. 僅對兩者共有的電影計算混合分數
+        common_movies = set(dict_narr.keys()) & set(dict_topo.keys())
+        
+        for mid in common_movies:
+            # 正規化
+            n_norm = normalize(dict_narr[mid], min_n, max_n)
+            t_norm = normalize(dict_topo[mid], min_t, max_t)
+            
+            # 加權融合
+            combined_score = alpha * n_norm + (1 - alpha) * t_norm
+            final_scores.append((mid, combined_score))
+        
+        final_scores.sort(key=lambda x: x[1])
+        return final_scores[:5]
+        """
         混合搜尋：同時考慮敘事節奏與社會結構
         """
         narrative_res = dict(self.search_by_narrative(query_id, top_k=1223)) # 全搜
