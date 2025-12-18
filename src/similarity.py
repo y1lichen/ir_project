@@ -38,6 +38,5 @@ class QuerySimilarity:
         scores = dict(sorted(scores.items(), key=lambda x : x[1], reverse=True))
 
         topk = list(scores.keys())[:k]
-        print(topk)
 
         return topk
