@@ -17,6 +17,7 @@ data/scripts/
 data/parsed/
 data/movies.json
 data/features_cache.pkl
+data/tf-idf
 *.bak
 
 # IDE
