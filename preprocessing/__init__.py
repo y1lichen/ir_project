@@ -8,6 +8,7 @@ Modules:
 
 from .scraper import get_movie_list, scrape_detail_page, scrape_script, main as scrape_main
 from .parser import parse_script, parse_single_file, main as parse_main
+from .tfidf import build_query_vector, dictionary_lookup, cosine, build_index
 
 __all__ = [
     # Scraper
@@ -19,4 +20,9 @@ __all__ = [
     "parse_script",
     "parse_single_file",
     "parse_main",
+    # TF-IDF
+    "build_query_vector",
+    "dictionary_lookup",
+    "cosine",
+    "build_index"
 ]

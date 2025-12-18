@@ -8,6 +8,7 @@ from tqdm import tqdm
 from src.features import FeatureExtractor
 from src.retrieval import StructRetrieval
 # from src.lightgcn import SimpleLightGCN, DataLoader # 若需訓練推薦模型時開啟
+from src.similarity import QuerySimilarity
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -114,16 +115,65 @@ def run_demo_search(feature_db, query_id):
     for rank, (mid, score) in enumerate(hybrid_results, 1):
         print(f"   {rank}. {mid:<25} (Hybrid Score: {score:.4f})")
 
+def get_recommendations(feature_db, query_id, top_k=5):
+    """
+    回傳該電影的三種結構相似推薦結果
+    """
+    retriever = StructRetrieval(feature_db)
+
+    narrative = retriever.search_by_narrative(query_id, top_k=top_k)
+    topology = retriever.search_by_topology(query_id, top_k=top_k)
+    hybrid = retriever.hybrid_search(query_id)
+
+    return {
+        "narrative": narrative,
+        "topology": topology,
+        "hybrid": hybrid
+    }
+
+
+def display_result(topk_similarity, feature_db):
+    print("\n" + "="*50)
+    print("根據您的查詢內容，我們找到以下相關電影：")
+    print("="*50)
+
+    for i, mid in enumerate(topk_similarity, 1):
+        print(f"{i}. {mid}")
+
+    print("\n進一步為您推薦每部電影的相似作品 ;)")
+
+    for target_movie in topk_similarity:
+        results = get_recommendations(feature_db, target_movie)
+
+        print("\n" + "-"*50)
+        print(f"以電影 [{target_movie}] 為核心的相似推薦")
+        print("-"*50)
+
+        print("\n【敘事結構相似（情感節奏 / DTW）】")
+        for rank, (mid, score) in enumerate(results["narrative"], 1):
+            print(f"  {rank}. {mid:<25} (DTW: {score:.4f})")
+
+        print("\n【社會結構相似（角色網絡 / NetLSD）】")
+        for rank, (mid, score) in enumerate(results["topology"], 1):
+            print(f"  {rank}. {mid:<25} (L2: {score:.4f})")
+
+        print("\n【混合結構推薦（Hybrid）】")
+        for rank, (mid, score) in enumerate(results["hybrid"], 1):
+            print(f"  {rank}. {mid:<25} (Score: {score:.4f})")
+
+
 def main():
     # 步驟 1: 準備特徵庫
     # 如果是第一次執行，這裡會比較久
     feature_db = load_or_process_features()
+
+    # 步驟 2: 使用者輸入關鍵字，查找電影
+    query_similarity = QuerySimilarity(DATA_DIR)
+    user_query = input("請輸入查詢文字：")
+    topk = query_similarity.retrieve_top_k(user_query)
     
-    # 步驟 2: 定義想要測試的電影 ID
-    target_movie = "air-force-one"  # 請根據data/scripts調整
-    
-    # 步驟 3: 執行搜尋
-    run_demo_search(feature_db, target_movie)
+    # 步驟 3: 針對找到的電影進行推薦 & display final result
+    display_result(topk, feature_db)
 
     # 步驟 4 (可選): 這裡可以加入 LightGCN 的訓練或推論代碼
     # print("\n[INFO] LightGCN 推薦模型初始化中... (省略)")
