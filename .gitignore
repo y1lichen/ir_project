@@ -36,3 +36,8 @@ progress.json
 
 # Output files
 *.png
+
+
+*.lock
+pyproj.toml
+.py
