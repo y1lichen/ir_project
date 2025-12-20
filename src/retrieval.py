@@ -49,7 +49,7 @@ class StructRetrieval:
         distances.sort(key=lambda x: x[1])
         return distances[:top_k]
 
-    def hybrid_search(self, query_id, alpha=0.5):
+    def hybrid_search(self, query_id, alpha=0.5, top_k=5):
         """
         混合搜尋：使用 Min-Max Normalization 解決尺度不平衡問題
         """
@@ -89,4 +89,4 @@ class StructRetrieval:
             final_scores.append((mid, combined_score))
         
         final_scores.sort(key=lambda x: x[1])
-        return final_scores[:5]
+        return final_scores[:top_k]
