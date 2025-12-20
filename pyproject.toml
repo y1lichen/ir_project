@@ -17,6 +17,7 @@ dependencies = [
     "requests",
     "beautifulsoup4",
     "scikit-learn",
+    "pandas",
 ]
 
 [tool.hatch.build.targets.wheel]

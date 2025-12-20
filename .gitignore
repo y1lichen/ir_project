@@ -13,9 +13,10 @@ venv/
 ENV/
 
 # Data files (too large for git)
-data/scripts/
+data
 data/parsed/
 data/movies.json
+data/ml-25m
 *.pkl
 data/tf-idf
 *.bak
@@ -39,8 +40,6 @@ progress.json
 
 # Evaluation outputs
 structural_eval_results.json
-EVALUATION_REPORT.md
-EVALUATION_REPORT.docx
 
 
 *.lock
