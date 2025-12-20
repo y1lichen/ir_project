@@ -11,7 +11,7 @@ def get_movie_users(movies_file='data/movies.json'):
     movie_users = {}
     for m in movies:
         # 只記錄喜歡該電影的用戶 (rating >= 7)
-        users = set(r['user'] for r in m.get('reviews', []) if r['rating'] >= 7)
+        users = set(r['user'] for r in m.get('reviews', []) if r['rating'] >= 0)
         if users:
             movie_users[m['id']] = users
     return movie_users
