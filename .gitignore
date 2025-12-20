@@ -38,6 +38,11 @@ progress.json
 # Output files
 *.png
 
+# Evaluation outputs
+structural_eval_results.json
+EVALUATION_REPORT.md
+EVALUATION_REPORT.docx
+
 
 *.lock
 pyproj.toml
