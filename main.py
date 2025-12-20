@@ -8,7 +8,8 @@ from tqdm import tqdm
 from src.features import FeatureExtractor
 from src.retrieval import StructRetrieval
 # from src.lightgcn import SimpleLightGCN, DataLoader # 若需訓練推薦模型時開啟
-from src.similarity import QuerySimilarity
+from src.tfidf_similarity import QuerySimilarity
+from src.bert_similarity import BertQuerySimilarity
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -168,12 +169,19 @@ def main():
     feature_db = load_or_process_features()
 
     # 步驟 2: 使用者輸入關鍵字，查找電影
-    query_similarity = QuerySimilarity(DATA_DIR)
     user_query = input("請輸入查詢文字：")
-    topk = query_similarity.retrieve_top_k(user_query)
+
+    # use tfidf-based
+    # tfidf_similarity = QuerySimilarity(DATA_DIR)
+    # tfidf_topk = tfidf_similarity.retrieve_top_k(user_query)
+
+    # use bert model based
+    bert_similarity = BertQuerySimilarity(DATA_DIR)
+    bert_topK = bert_similarity.retrieve_top_k(user_query, k=5)
     
     # 步驟 3: 針對找到的電影進行推薦 & display final result
-    display_result(topk, feature_db)
+    # display_result(tfidf_topk, feature_db) # tfidf-based
+    display_result(bert_topK, feature_db)
 
     # 步驟 4 (可選): 這裡可以加入 LightGCN 的訓練或推論代碼
     # print("\n[INFO] LightGCN 推薦模型初始化中... (省略)")
