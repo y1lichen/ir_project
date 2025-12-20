@@ -18,6 +18,7 @@ data/parsed/
 data/movies.json
 data/features_cache.pkl
 data/tf-idf
+data/embeddings
 *.bak
 
 # IDE
