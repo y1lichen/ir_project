@@ -112,6 +112,9 @@ def compute_tf(doc_unique_terms):
 def build_vector(term_frequency, dictionary_info, N, doc_name):
     vector = []
     for t, tf in term_frequency.items():
+        if t not in dictionary_info:
+            continue   # ignore OOV term
+        
         df = dictionary_info[t].get('df')
         idf = math.log(N / int(df))
         tfidf = round(tf*idf, 4)
