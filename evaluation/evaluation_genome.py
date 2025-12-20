@@ -1,6 +1,7 @@
 import json
-import pickle
 import os
+import pickle
+import sys
 import random
 import numpy as np
 import pandas as pd
@@ -8,6 +9,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 from scipy.stats import ttest_rel
+
+# Add project root to path for imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from src.retrieval import StructRetrieval
 
 # =========================

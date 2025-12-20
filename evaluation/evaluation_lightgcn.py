@@ -1,8 +1,16 @@
 import json
+import os
+import sys
 import numpy as np
 import torch
 from collections import defaultdict
-from src.lightgcn import SimpleLightGCN, DataLoader # 假設這是你之前的模組
+
+# Add project root to path for imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.lightgcn import SimpleLightGCN, DataLoader
 
 def evaluate_model(movies_file='data/movies.json', k=10):
     print("正在載入評分數據...")
