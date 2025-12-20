@@ -505,11 +505,20 @@ movie-struct-retrieval/
 │   ├── similarity.py           # 查詢相似度計算
 │   └── lightgcn.py             # LightGCN 推薦模型
 │
+├── evaluation/                 # 評估模組
+│   ├── evaluation_structure.py # 結構一致性評估（ILD、Novelty、Coverage）
+│   ├── evaluation_genome.py    # MovieLens Tag Genome 語義評估
+│   ├── evaluation_lightgcn.py  # LightGCN 推薦評估（Recall@K、NDCG@K）
+│   └── evaluation_user_overlap.py # 用戶重疊度評估（Jaccard 相似度）
+│
 └── data/                       # 資料目錄
     ├── scripts/                # 原始劇本文本 (1223 部)
     ├── parsed/                 # 解析後結構化數據 (1223 部)
+    ├── ml-25m/                 # MovieLens 25M 數據集
     ├── tf-idf/                 # TF-IDF 向量索引
-    └── features_cache.pkl      # 特徵快取
+    ├── features_cache.pkl      # 特徵快取
+    ├── distance_cache.pkl      # 預計算距離矩陣快取
+    └── id_mapping.json         # IMSDb ↔ MovieLens ID 映射
 ```
 
 ---
@@ -597,12 +606,31 @@ uv run python main.py
 uv run python plot_result.py
 ```
 
-### 6.5 依賴套件
+### 6.5 評估系統
+
+系統提供四種評估方法，驗證推薦結果的有效性：
+
+```bash
+# 結構一致性評估（ILD、Novelty、Coverage 等 Beyond-Accuracy 指標）
+uv run python evaluation/evaluation_structure.py
+
+# MovieLens Tag Genome 語義評估
+uv run python evaluation/evaluation_genome.py
+
+# LightGCN 推薦評估（Recall@K、NDCG@K）
+uv run python evaluation/evaluation_lightgcn.py
+
+# 用戶重疊度評估（Jaccard 相似度）
+uv run python evaluation/evaluation_user_overlap.py
+```
+
+### 6.6 依賴套件
 
 | 套件 | 用途 |
 |------|------|
 | `beautifulsoup4`, `lxml`, `requests` | 網頁爬蟲 |
-| `numpy`, `scipy` | 數值計算 |
+| `numpy`, `scipy`, `pandas` | 數值計算與資料處理 |
+| `scikit-learn` | 機器學習工具（PCA、統計分析）|
 | `networkx`, `netlsd` | 圖分析 |
 | `vaderSentiment` | 情感分析 |
 | `fastdtw` | 動態時間規整 |
