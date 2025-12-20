@@ -1,0 +1,23 @@
+[project]
+name = "movie-recommendation"
+version = "0.1.0"
+description = "Movie recommendation system based on narrative structure and social topology"
+requires-python = ">=3.10"
+dependencies = [
+    "netlsd",
+    "numpy",
+    "networkx",
+    "vaderSentiment",
+    "scipy",
+    "tqdm",
+    "matplotlib",
+    "fastdtw",
+    "torch",
+    "nltk",
+    "requests",
+    "beautifulsoup4",
+    "scikit-learn",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "preprocessing"]
