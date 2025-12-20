@@ -5,6 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.decomposition import PCA
 from tqdm import tqdm
 from scipy.stats import ttest_rel
 from src.retrieval import StructRetrieval
@@ -15,6 +16,7 @@ from src.retrieval import StructRetrieval
 GENOME_SCORES_PATH = 'data/ml-25m/genome-scores.csv'
 MAPPING_PATH = 'data/id_mapping.json'
 FEATURES_CACHE = 'data/features_cache.pkl'
+PCA_DIM = 50  # 保留主成分數量，可調整
 
 
 def load_genome_matrix():
@@ -29,15 +31,24 @@ def load_genome_matrix():
     df = pd.read_csv(GENOME_SCORES_PATH)
 
     # Pivot 成 movie × tag 的矩陣
-    matrix = df.pivot(index='movieId', columns='tagId', values='relevance')
+    matrix = df.pivot(index='movieId', columns='tagId', values='relevance').fillna(0)
     print(f"Genome Matrix Shape: {matrix.shape}")
     return matrix
 
 
+def apply_pca(matrix, n_components=PCA_DIM):
+    """
+    對 genome matrix 做 PCA 降維
+    Returns: numpy array (電影數 × n_components)
+    """
+    print(f"對 Tag Genome 做 PCA，保留 {n_components} 維主成分...")
+    pca = PCA(n_components=n_components, random_state=42)
+    reduced = pca.fit_transform(matrix.values)
+    print(f"PCA 後矩陣形狀: {reduced.shape}")
+    return pd.DataFrame(reduced, index=matrix.index)
+
+
 def bootstrap_mean_diff(a, b, n_boot=10000, seed=42):
-    """
-    Bootstrap 估計 mean(a - b) 的 95% CI
-    """
     rng = np.random.default_rng(seed)
     diffs = []
     n = len(a)
@@ -63,52 +74,41 @@ def evaluate_genome():
         feature_db = pickle.load(f)
 
     genome_matrix = load_genome_matrix()
+    genome_matrix_pca = apply_pca(genome_matrix, PCA_DIM)
     retriever = StructRetrieval(feature_db)
 
     # =========================
     # 2. 篩選測試集
     # =========================
-    test_movies = []
-    for mid in feature_db.keys():
-        if mid in id_map:
-            ml_id = id_map[mid]
-            if ml_id in genome_matrix.index:
-                test_movies.append(mid)
+    test_movies = [mid for mid in feature_db.keys()
+                   if mid in id_map and id_map[mid] in genome_matrix_pca.index]
 
     print(f"符合評估條件的電影數: {len(test_movies)}")
-
     test_samples = test_movies
     print(f"開始評估 {len(test_samples)} 部樣本電影...")
 
     # =========================
     # 3. 評估迴圈
     # =========================
-    metrics = {
-        'Random': [],
-        'Narrative (DTW)': [],
-        'Hybrid': []
-    }
+    metrics = {'Random': [], 'Narrative (DTW)': [], 'Hybrid': []}
 
-    for query_id in tqdm(test_samples, desc="計算基因相似度"):
+    for query_id in tqdm(test_samples, desc="計算基因相似度 (PCA)"):
         query_ml_id = id_map[query_id]
-        query_vec = genome_matrix.loc[query_ml_id].values.reshape(1, -1)
+        query_vec = genome_matrix_pca.loc[query_ml_id].values.reshape(1, -1)
 
         def calc_list_similarity(rec_list):
             sims = []
             for rec_id, _ in rec_list:
                 if rec_id in id_map:
                     rec_ml_id = id_map[rec_id]
-                    if rec_ml_id in genome_matrix.index:
-                        rec_vec = genome_matrix.loc[rec_ml_id].values.reshape(1, -1)
-                        sim = cosine_similarity(query_vec, rec_vec)[0][0]
-                        sims.append(sim)
+                    if rec_ml_id in genome_matrix_pca.index:
+                        rec_vec = genome_matrix_pca.loc[rec_ml_id].values.reshape(1, -1)
+                        sims.append(cosine_similarity(query_vec, rec_vec)[0][0])
             return np.mean(sims) if sims else 0.0
 
         # A. Random baseline
         rand_ids = np.random.choice(test_movies, 5, replace=False)
-        metrics['Random'].append(
-            calc_list_similarity([(rid, 0) for rid in rand_ids])
-        )
+        metrics['Random'].append(calc_list_similarity([(rid, 0) for rid in rand_ids]))
 
         # B. Narrative (DTW)
         recs = retriever.search_by_narrative(query_id, top_k=5)
@@ -122,7 +122,7 @@ def evaluate_genome():
     # 4. 平均結果
     # =========================
     print("\n" + "=" * 60)
-    print("MovieLens 25M Tag Genome 語義一致性評估")
+    print("MovieLens 25M Tag Genome 語義一致性評估 (PCA)")
     print("指標: Cosine Similarity (越高代表內容標籤分佈越相似)")
     print("=" * 60)
 
