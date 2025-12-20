@@ -78,11 +78,7 @@ class StructuralEvaluator:
         print("[INFO] Precomputing graph features (NetLSD)...")
         self.graph_features = self._precompute_graph_features()
 
-        # Build writer index for proxy evaluation
-        print("[INFO] Building writer index...")
-        self.writer_index = self._build_writer_index()
-
-        # Build review TF-IDF matrix for semantic similarity
+        # Build review TF-IDF matrix for baseline comparison
         print("[INFO] Building review TF-IDF matrix...")
         self.review_tfidf, self.review_movie_ids = self._build_review_tfidf()
 
@@ -94,6 +90,16 @@ class StructuralEvaluator:
         print("[INFO] Building user-movie index for LOO evaluation...")
         self.user_movies = self._build_user_movie_index()
         print(f"[INFO] Found {len(self.user_movies)} users with 2+ reviews")
+
+        # Build script TF-IDF matrix for content-based baseline
+        print("[INFO] Building script TF-IDF matrix for baseline...")
+        self.script_tfidf, self.script_movie_ids = self._build_script_tfidf()
+        if self.script_tfidf is not None:
+            self.script_id_to_idx = {mid: i for i, mid in enumerate(self.script_movie_ids)}
+            print(f"[INFO] Script TF-IDF matrix: {self.script_tfidf.shape}")
+        else:
+            self.script_id_to_idx = {}
+            print("[WARN] Script TF-IDF matrix not available")
 
         print("[INFO] StructuralEvaluator initialized.")
 
@@ -265,20 +271,8 @@ class StructuralEvaluator:
         return graph_features
 
     # ==========================================================================
-    # Writer Index, Review TF-IDF, and Popularity
+    # Review TF-IDF and Popularity
     # ==========================================================================
-
-    def _build_writer_index(self):
-        """Build index of movies by writer for proxy evaluation."""
-        writer_to_movies = {}
-        for mid, meta in self.metadata.items():
-            for writer in meta.get('writers', []):
-                if writer not in writer_to_movies:
-                    writer_to_movies[writer] = set()
-                writer_to_movies[writer].add(mid)
-
-        # Only keep writers with 2+ movies
-        return {w: movies for w, movies in writer_to_movies.items() if len(movies) >= 2}
 
     def _build_review_tfidf(self):
         """Build TF-IDF matrix from review texts for semantic similarity."""
@@ -303,6 +297,65 @@ class StructuralEvaluator:
             max_df=0.8
         )
         tfidf_matrix = vectorizer.fit_transform(review_texts)
+
+        return tfidf_matrix, movie_ids
+
+    def _build_script_tfidf(self, cache_path='data/script_tfidf_cache.pkl'):
+        """
+        Build TF-IDF matrix from movie scripts with caching.
+
+        Reference:
+            Salton, G., & Buckley, C. (1988). "Term-weighting approaches in
+            automatic text retrieval." Information Processing & Management.
+
+        Returns:
+            Tuple of (tfidf_matrix, movie_ids) or (None, []) if failed
+        """
+        import pickle
+
+        # Try loading from cache
+        if os.path.exists(cache_path):
+            print(f"[INFO] Loading script TF-IDF from cache: {cache_path}")
+            with open(cache_path, 'rb') as f:
+                cached = pickle.load(f)
+            return cached['matrix'], cached['movie_ids']
+
+        # Build from scripts
+        scripts_dir = os.path.join(os.path.dirname(self.parsed_dir), 'scripts')
+        movie_ids = []
+        script_texts = []
+
+        print(f"[INFO] Building script TF-IDF matrix from {scripts_dir}...")
+        for mid in tqdm(self.feature_db.keys(), desc="Loading scripts"):
+            script_path = os.path.join(scripts_dir, f"{mid}.txt")
+            if os.path.exists(script_path):
+                try:
+                    with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        text = f.read()
+                    if len(text.strip()) > 100:
+                        movie_ids.append(mid)
+                        script_texts.append(text)
+                except Exception as e:
+                    continue
+
+        if not script_texts:
+            print("[WARN] No script texts found for TF-IDF")
+            return None, []
+
+        print(f"[INFO] Vectorizing {len(script_texts)} scripts...")
+        vectorizer = TfidfVectorizer(
+            stop_words='english',
+            max_features=10000,
+            min_df=2,
+            max_df=0.85,
+            ngram_range=(1, 2)
+        )
+        tfidf_matrix = vectorizer.fit_transform(script_texts)
+
+        # Save cache
+        print(f"[INFO] Saving script TF-IDF cache to: {cache_path}")
+        with open(cache_path, 'wb') as f:
+            pickle.dump({'matrix': tfidf_matrix, 'movie_ids': movie_ids}, f)
 
         return tfidf_matrix, movie_ids
 
@@ -352,30 +405,158 @@ class StructuralEvaluator:
         return {u: m for u, m in user_movies.items() if len(m) >= 2}
 
     # ==========================================================================
+    # Baseline Methods
+    # ==========================================================================
+
+    def _baseline_random(self, qid, k):
+        """Random baseline - lower bound for evaluation."""
+        all_ids = [m for m in self.feature_db.keys() if m != qid]
+        sampled = random.sample(all_ids, min(k, len(all_ids)))
+        return [(m, 0) for m in sampled]
+
+    def _baseline_popularity(self, qid, k):
+        """Popularity baseline - non-personalized recommendation."""
+        rated_movies = [(mid, meta.get('avg_rating', 0) or 0)
+                       for mid, meta in self.metadata.items()
+                       if mid != qid and mid in self.feature_db]
+        rated_movies.sort(key=lambda x: x[1], reverse=True)
+        return rated_movies[:k]
+
+    def _baseline_tfidf_script(self, qid, k):
+        """
+        TF-IDF script content-based baseline.
+
+        Reference:
+            Salton, G., & Buckley, C. (1988). "Term-weighting approaches in
+            automatic text retrieval." Information Processing & Management.
+        """
+        if not hasattr(self, 'script_tfidf') or self.script_tfidf is None:
+            return self._baseline_random(qid, k)
+        if qid not in self.script_id_to_idx:
+            return self._baseline_random(qid, k)
+
+        query_idx = self.script_id_to_idx[qid]
+        similarities = cosine_similarity(
+            self.script_tfidf[query_idx],
+            self.script_tfidf
+        ).flatten()
+
+        sorted_indices = np.argsort(similarities)[::-1]
+        results = []
+        for idx in sorted_indices:
+            mid = self.script_movie_ids[idx]
+            if mid != qid:
+                results.append((mid, similarities[idx]))
+            if len(results) >= k:
+                break
+        return results
+
+    def _baseline_tfidf_review(self, qid, k):
+        """
+        TF-IDF review-based baseline.
+
+        Uses existing review TF-IDF matrix for semantic similarity.
+        """
+        if self.review_tfidf is None:
+            return self._baseline_random(qid, k)
+
+        review_id_to_idx = {mid: i for i, mid in enumerate(self.review_movie_ids)}
+        if qid not in review_id_to_idx:
+            return self._baseline_random(qid, k)
+
+        query_idx = review_id_to_idx[qid]
+        similarities = cosine_similarity(
+            self.review_tfidf[query_idx],
+            self.review_tfidf
+        ).flatten()
+
+        sorted_indices = np.argsort(similarities)[::-1]
+        results = []
+        for idx in sorted_indices:
+            mid = self.review_movie_ids[idx]
+            if mid != qid:
+                results.append((mid, similarities[idx]))
+            if len(results) >= k:
+                break
+        return results
+
+    def _baseline_knn_genre(self, qid, k):
+        """
+        Genre-based KNN baseline (Jaccard similarity).
+
+        Reference:
+            Traditional content-based filtering approach.
+            Ricci, F., et al. (2015). "Recommender Systems Handbook."
+        """
+        query_genres = self.metadata.get(qid, {}).get('genres', set())
+        if not query_genres:
+            return self._baseline_random(qid, k)
+
+        def jaccard(a, b):
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+
+        similarities = []
+        for mid in self.feature_db.keys():
+            if mid == qid:
+                continue
+            target_genres = self.metadata.get(mid, {}).get('genres', set())
+            sim = jaccard(query_genres, target_genres)
+            similarities.append((mid, sim))
+
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        return similarities[:k]
+
+    def _baseline_knn_rating(self, qid, k):
+        """
+        Rating-based KNN baseline.
+
+        Recommends movies with similar average ratings.
+        """
+        query_rating = self.metadata.get(qid, {}).get('avg_rating')
+        if query_rating is None:
+            return self._baseline_random(qid, k)
+
+        distances = []
+        for mid in self.feature_db.keys():
+            if mid == qid:
+                continue
+            target_rating = self.metadata.get(mid, {}).get('avg_rating')
+            if target_rating is not None:
+                dist = abs(query_rating - target_rating)
+                distances.append((mid, dist))
+
+        distances.sort(key=lambda x: x[1])
+        # Convert distance to similarity score
+        return [(m, 1.0 - d/10.0) for m, d in distances[:k]]
+
+    # ==========================================================================
     # Helper: Get Recommendations
     # ==========================================================================
 
     def _get_recommendations(self, retriever, qid, method, k):
         """Get recommendations using specified method."""
+        # Structural methods (require retriever)
         if method == 'narrative':
             res = retriever.search_by_narrative(qid, top_k=k+1)
         elif method == 'topology':
             res = retriever.search_by_topology(qid, top_k=k+1)
         elif method == 'hybrid':
             res = retriever.hybrid_search(qid, top_k=k+1)
+        # Baseline methods (6 types)
         elif method == 'random':
-            # Random baseline
-            all_ids = list(self.feature_db.keys())
-            all_ids = [m for m in all_ids if m != qid]
-            sampled = random.sample(all_ids, min(k, len(all_ids)))
-            res = [(m, 0) for m in sampled]
+            res = self._baseline_random(qid, k)
         elif method == 'popularity':
-            # Popularity baseline (using rating as proxy)
-            rated_movies = [(mid, meta.get('avg_rating', 0) or 0)
-                           for mid, meta in self.metadata.items()
-                           if mid != qid and mid in self.feature_db]
-            rated_movies.sort(key=lambda x: x[1], reverse=True)
-            res = rated_movies[:k]
+            res = self._baseline_popularity(qid, k)
+        elif method == 'tfidf_script':
+            res = self._baseline_tfidf_script(qid, k)
+        elif method == 'tfidf_review':
+            res = self._baseline_tfidf_review(qid, k)
+        elif method == 'knn_genre':
+            res = self._baseline_knn_genre(qid, k)
+        elif method == 'knn_rating':
+            res = self._baseline_knn_rating(qid, k)
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -629,108 +810,6 @@ class StructuralEvaluator:
 
         total_items = len(self.feature_db)
         return len(all_recommended) / total_items if total_items > 0 else 0.0
-
-    # ==========================================================================
-    # Proxy Ground Truth Metrics
-    # ==========================================================================
-
-    def auteur_consistency(self, retriever, method='hybrid', k=5):
-        """
-        Auteur Consistency Score (ACS@K)
-
-        Measures if recommendations include movies by the same writer/director.
-        This serves as a proxy for ground truth since auteurs often have
-        consistent narrative and structural styles.
-
-        Returns:
-            float: Hit rate of same-writer recommendations [0, 1]
-        """
-        hits = 0
-        total = 0
-
-        for qid in tqdm(self.feature_db.keys(), desc=f"ACS@{k} ({method})"):
-            query_writers = self.metadata.get(qid, {}).get('writers', [])
-            if not query_writers:
-                continue
-
-            # Find same-writer movies
-            same_writer_movies = set()
-            for writer in query_writers:
-                same_writer_movies.update(self.writer_index.get(writer, set()))
-            same_writer_movies.discard(qid)
-
-            if not same_writer_movies:
-                continue
-
-            rec_ids = set(self._get_recommendations(retriever, qid, method, k))
-
-            if rec_ids & same_writer_movies:
-                hits += 1
-            total += 1
-
-        return hits / total if total > 0 else 0.0
-
-    def quality_proximity(self, retriever, method='hybrid', k=5):
-        """
-        Quality Proximity Score (QPS@K)
-
-        Measures average rating difference between query and recommendations.
-        Lower values indicate recommendations have similar quality ratings.
-
-        Returns:
-            float: Mean absolute rating difference (lower is better)
-        """
-        rating_diffs = []
-
-        for qid in tqdm(self.feature_db.keys(), desc=f"QPS@{k} ({method})"):
-            query_rating = self.metadata.get(qid, {}).get('avg_rating')
-            if query_rating is None:
-                continue
-
-            rec_ids = self._get_recommendations(retriever, qid, method, k)
-
-            for rid in rec_ids:
-                rec_rating = self.metadata.get(rid, {}).get('avg_rating')
-                if rec_rating is not None:
-                    rating_diffs.append(abs(query_rating - rec_rating))
-
-        return np.mean(rating_diffs) if rating_diffs else float('inf')
-
-    def semantic_consistency(self, retriever, method='hybrid', k=5):
-        """
-        Semantic Consistency Score (SCS@K)
-
-        Measures TF-IDF cosine similarity of review texts between
-        query and recommended movies.
-
-        Returns:
-            float: Mean cosine similarity [0, 1]
-        """
-        if self.review_tfidf is None:
-            return 0.0
-
-        similarities = []
-        review_id_to_idx = {mid: i for i, mid in enumerate(self.review_movie_ids)}
-
-        for qid in tqdm(self.feature_db.keys(), desc=f"SCS@{k} ({method})"):
-            if qid not in review_id_to_idx:
-                continue
-
-            query_idx = review_id_to_idx[qid]
-
-            rec_ids = self._get_recommendations(retriever, qid, method, k)
-
-            for rid in rec_ids:
-                if rid in review_id_to_idx:
-                    rec_idx = review_id_to_idx[rid]
-                    sim = cosine_similarity(
-                        self.review_tfidf[query_idx],
-                        self.review_tfidf[rec_idx]
-                    )[0, 0]
-                    similarities.append(sim)
-
-        return np.mean(similarities) if similarities else 0.0
-
     # ==========================================================================
     # Dimension Analysis
     # ==========================================================================
@@ -945,14 +1024,36 @@ class StructuralEvaluator:
 
     def compute_baseline_metrics(self, retriever, k=5):
         """
-        Compute metrics for random and popularity baselines.
+        Compute metrics for all baseline methods.
+
+        Baseline Methods:
+        1. random: Random sampling (lower bound)
+        2. popularity: Rating-based (non-personalized)
+        3. tfidf_script: Script content similarity (Salton & Buckley, 1988)
+        4. tfidf_review: Review text similarity
+        5. knn_genre: Genre Jaccard similarity (traditional CB)
+        6. knn_rating: Rating proximity (quality-based)
+
+        Academic References:
+        - TF-IDF: Salton & Buckley (1988)
+        - KNN: Ricci et al. (2015) Recommender Systems Handbook
+        - Evaluation: McNee et al. (2006) Beyond Accuracy
 
         Returns:
             dict: Baseline metrics for comparison
         """
         baselines = {}
 
-        for baseline_method in ['random', 'popularity']:
+        baseline_methods = [
+            'random',
+            'popularity',
+            'tfidf_script',
+            'tfidf_review',
+            'knn_genre',
+            'knn_rating'
+        ]
+
+        for baseline_method in baseline_methods:
             print(f"\n--- Computing {baseline_method.upper()} baseline ---")
             baselines[baseline_method] = {
                 'ATC': self.arc_type_consistency(retriever, method=baseline_method, k=k),
@@ -960,7 +1061,6 @@ class StructuralEvaluator:
                 'GFS': self.graph_feature_similarity(retriever, method=baseline_method, k=k),
                 'ILD_narr': self.intra_list_diversity(retriever, method=baseline_method, k=k, distance_type='narrative'),
                 'ILD_topo': self.intra_list_diversity(retriever, method=baseline_method, k=k, distance_type='topology'),
-                'ACS': self.auteur_consistency(retriever, method=baseline_method, k=k),
             }
 
         return baselines
@@ -1100,59 +1200,54 @@ class StructuralEvaluator:
         saved_files.append(path)
         print(f"[VIZ] Saved: {path}")
 
-        # 4. Proxy Ground Truth Metrics
-        fig, ax = plt.subplots(figsize=(10, 6))
-        proxy_metrics = ['ACS', 'SCS']  # Exclude QPS since lower is better
-        x = np.arange(len(proxy_metrics))
-
-        for i, method in enumerate(methods):
-            values = [results[method].get(m, 0) for m in proxy_metrics]
-            bars = ax.bar(x + i * width, values, width, label=method.capitalize(),
-                         color=colors[method], alpha=0.85)
-
-        ax.set_xlabel('Metrics')
-        ax.set_ylabel('Score (higher is better)')
-        ax.set_title('Proxy Ground Truth Metrics')
-        ax.set_xticks(x + width)
-        ax.set_xticklabels(['Auteur\nConsistency', 'Semantic\nConsistency'])
-        ax.legend()
-
-        plt.tight_layout()
-        path = os.path.join(save_dir, 'proxy_ground_truth.png')
-        plt.savefig(path, dpi=150, bbox_inches='tight')
-        plt.close()
-        saved_files.append(path)
-        print(f"[VIZ] Saved: {path}")
-
-        # 5. Baseline Comparison (if available)
+        # 4. Baseline Comparison (if available)
         if baselines:
-            fig, ax = plt.subplots(figsize=(12, 6))
-            compare_metrics = ['ATC', 'NRC', 'GFS', 'ACS']
+            fig, ax = plt.subplots(figsize=(16, 7))
+            compare_metrics = ['ATC', 'NRC', 'GFS']
             x = np.arange(len(compare_metrics))
-            bar_width = 0.2
+            bar_width = 0.12
 
-            all_methods = ['random', 'popularity', 'narrative', 'hybrid']
+            # All baseline methods + our structural methods
+            all_methods = ['random', 'popularity', 'tfidf_script', 'tfidf_review',
+                          'knn_genre', 'knn_rating', 'narrative', 'hybrid']
             method_colors = {
                 'random': '#95a5a6',
                 'popularity': '#f39c12',
+                'tfidf_script': '#9b59b6',
+                'tfidf_review': '#8e44ad',
+                'knn_genre': '#1abc9c',
+                'knn_rating': '#16a085',
                 'narrative': '#3498db',
                 'hybrid': '#2ecc71'
             }
+            method_labels = {
+                'random': 'Random',
+                'popularity': 'Popularity',
+                'tfidf_script': 'TF-IDF Script',
+                'tfidf_review': 'TF-IDF Review',
+                'knn_genre': 'KNN Genre',
+                'knn_rating': 'KNN Rating',
+                'narrative': 'Narrative',
+                'hybrid': 'Hybrid'
+            }
 
             for i, method in enumerate(all_methods):
-                if method in ['random', 'popularity']:
+                if method in baselines:
                     values = [baselines[method].get(m, 0) for m in compare_metrics]
-                else:
+                elif method in results:
                     values = [results[method].get(m, 0) for m in compare_metrics]
+                else:
+                    continue
                 bars = ax.bar(x + i * bar_width, values, bar_width,
-                             label=method.capitalize(), color=method_colors[method], alpha=0.85)
+                             label=method_labels.get(method, method),
+                             color=method_colors.get(method, '#7f8c8d'), alpha=0.85)
 
             ax.set_xlabel('Metrics')
             ax.set_ylabel('Score')
-            ax.set_title('Baseline Comparison\n(Our methods vs Random/Popularity)')
-            ax.set_xticks(x + 1.5 * bar_width)
-            ax.set_xticklabels(['Arc Type\nConsistency', 'Narrative\nRhythm', 'Graph\nSimilarity', 'Auteur\nConsistency'])
-            ax.legend(loc='upper right')
+            ax.set_title('Baseline Comparison\n(Structural Methods vs Traditional IR/ML Baselines)')
+            ax.set_xticks(x + 3.5 * bar_width)
+            ax.set_xticklabels(['Arc Type\nConsistency', 'Narrative\nRhythm', 'Graph\nSimilarity'])
+            ax.legend(loc='upper right', ncol=2, fontsize=9)
             ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
 
             plt.tight_layout()
@@ -1166,9 +1261,9 @@ class StructuralEvaluator:
         fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
 
         # Select metrics for radar (normalize to 0-1 scale)
-        radar_metrics = ['ATC', 'NRC', 'GFS', 'Coverage', 'ACS', 'SCS']
+        radar_metrics = ['ATC', 'NRC', 'GFS', 'Coverage', 'Novelty']
         radar_labels = ['Arc Type\nConsistency', 'Narrative\nRhythm', 'Graph\nSimilarity',
-                       'Coverage', 'Auteur\nConsistency', 'Semantic\nConsistency']
+                       'Coverage', 'Novelty']
 
         # Compute angles
         num_vars = len(radar_metrics)
@@ -1182,6 +1277,9 @@ class StructuralEvaluator:
                 # Normalize NRC from [-1,1] to [0,1]
                 if m == 'NRC':
                     val = (val + 1) / 2
+                # Normalize Novelty (log-based, typically 0-15)
+                elif m == 'Novelty':
+                    val = min(val / 15.0, 1.0)
                 values.append(val)
             values += values[:1]  # Complete the loop
 
@@ -1247,17 +1345,17 @@ class StructuralEvaluator:
         ax3.set_xticklabels(['Hit@10', 'NDCG@10', 'RW_Hit@10'])
         ax3.legend(fontsize=8)
 
-        # Middle-right: Proxy Metrics
+        # Middle-right: Novelty
         ax4 = fig.add_subplot(gs[1, 1])
-        metrics = ['ACS', 'SCS']
+        metrics = ['Novelty']
         x = np.arange(len(metrics))
         for i, method in enumerate(methods):
             values = [results[method].get(m, 0) for m in metrics]
             ax4.bar(x + i * width, values, width, label=method.capitalize(),
                    color=colors[method], alpha=0.85)
-        ax4.set_title('Proxy Ground Truth', fontweight='bold')
+        ax4.set_title('Novelty Score', fontweight='bold')
         ax4.set_xticks(x + width)
-        ax4.set_xticklabels(['Auteur', 'Semantic'])
+        ax4.set_xticklabels(['Novelty'])
         ax4.legend(fontsize=8)
 
         # Bottom: ILD comparison
@@ -1318,12 +1416,6 @@ class StructuralEvaluator:
             novelty = self.novelty_score(retriever, method=method, k=k)
             coverage = self.catalog_coverage(retriever, method=method, k=k)
 
-            # Proxy Ground Truth Metrics
-            print("\n--- Proxy Ground Truth Metrics ---")
-            acs = self.auteur_consistency(retriever, method=method, k=k)
-            qps = self.quality_proximity(retriever, method=method, k=k)
-            scs = self.semantic_consistency(retriever, method=method, k=k)
-
             results[method] = {
                 'ATC': atc,
                 'NRC': nrc,
@@ -1332,9 +1424,6 @@ class StructuralEvaluator:
                 'ILD_topo': ild_topo,
                 'Novelty': novelty,
                 'Coverage': coverage,
-                'ACS': acs,
-                'QPS': qps,
-                'SCS': scs
             }
 
         # Dimension Independence
@@ -1386,12 +1475,6 @@ class StructuralEvaluator:
         for metric in ['ILD_narr', 'ILD_topo', 'Novelty', 'Coverage']:
             print(f"{metric:<20} | {results['narrative'][metric]:>12.4f} | {results['topology'][metric]:>12.4f} | {results['hybrid'][metric]:>12.4f}")
 
-        print("\n--- Proxy Ground Truth ---")
-        print(f"{'Metric':<20} | {'Narrative':>12} | {'Topology':>12} | {'Hybrid':>12}")
-        print("-" * 62)
-        for metric in ['ACS', 'QPS', 'SCS']:
-            print(f"{metric:<20} | {results['narrative'][metric]:>12.4f} | {results['topology'][metric]:>12.4f} | {results['hybrid'][metric]:>12.4f}")
-
         print(f"\n--- Dimension Independence Score (Spearman ρ) ---")
         print(f"DIS: {dis:.4f}")
         print("  (Low value = dimensions are independent, hybrid is valuable)")
@@ -1403,15 +1486,19 @@ class StructuralEvaluator:
             print(f"{metric:<20} | {results['narrative'][metric]:>12.4f} | {results['topology'][metric]:>12.4f} | {results['hybrid'][metric]:>12.4f}")
 
         if include_baselines:
-            print("\n--- Baseline Comparison ---")
-            print(f"{'Metric':<12} | {'Random':>10} | {'Popularity':>10} | {'Narrative':>10} | {'Hybrid':>10}")
-            print("-" * 62)
-            for metric in ['ATC', 'NRC', 'GFS', 'ILD_narr', 'ACS']:
-                rand_val = baselines['random'].get(metric, 0)
-                pop_val = baselines['popularity'].get(metric, 0)
+            print("\n--- Baseline Comparison (All Methods) ---")
+            header = f"{'Metric':<10} | {'Random':>8} | {'Popular':>8} | {'TF-Script':>9} | {'TF-Review':>9} | {'KNN-Gen':>8} | {'KNN-Rat':>8} | {'Narr':>8} | {'Hybrid':>8}"
+            print(header)
+            print("-" * len(header))
+            for metric in ['ATC', 'NRC', 'GFS']:
+                row = f"{metric:<10}"
+                for bl in ['random', 'popularity', 'tfidf_script', 'tfidf_review', 'knn_genre', 'knn_rating']:
+                    val = baselines.get(bl, {}).get(metric, 0)
+                    row += f" | {val:>8.4f}"
                 narr_val = results['narrative'].get(metric, 0)
                 hyb_val = results['hybrid'].get(metric, 0)
-                print(f"{metric:<12} | {rand_val:>10.4f} | {pop_val:>10.4f} | {narr_val:>10.4f} | {hyb_val:>10.4f}")
+                row += f" | {narr_val:>8.4f} | {hyb_val:>8.4f}"
+                print(row)
 
         print("\n" + "=" * 70)
         print("METRIC LEGEND")
@@ -1423,9 +1510,6 @@ GFS  : Graph Feature Similarity (Tsitsulin et al., 2018) - Higher is better
 ILD  : Intra-List Diversity (Ziegler et al., 2005) - Higher = more diverse
 Novelty : Item Novelty Score (Zhou et al., 2010) - Higher = more novel
 Coverage: Catalog Coverage (Ge et al., 2010) - Higher = broader recommendations
-ACS  : Auteur Consistency Score - Higher is better (proxy ground truth)
-QPS  : Quality Proximity Score - Lower is better
-SCS  : Semantic Consistency Score - Higher is better
 DIS  : Dimension Independence Score - Low = dimensions are independent
 
 --- User-Based Metrics (Bauer & Zangerle, 2020) ---

@@ -16,8 +16,7 @@ ENV/
 data/scripts/
 data/parsed/
 data/movies.json
-data/features_cache.pkl
-data/distance_cache.pkl
+*.pkl
 data/tf-idf
 *.bak
 
