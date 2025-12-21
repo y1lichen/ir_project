@@ -19,6 +19,7 @@ data/movies.json
 data/ml-25m
 *.pkl
 data/tf-idf
+data/embeddings
 *.bak
 
 # IDE

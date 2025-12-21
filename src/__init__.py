@@ -10,12 +10,14 @@ Modules:
 from .features import FeatureExtractor
 from .retrieval import StructRetrieval
 from .lightgcn import SimpleLightGCN, DataLoader
-from .similarity import QuerySimilarity
+from .tfidf_similarity import QuerySimilarity
+from .bert_similarity import BertQuerySimilarity
 
 __all__ = [
     "FeatureExtractor",
     "StructRetrieval",
     "SimpleLightGCN",
     "DataLoader",
-    "QuerySimilarity"
+    "QuerySimilarity",
+    "BertQuerySimilarity"
 ]
