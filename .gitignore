@@ -13,10 +13,11 @@ venv/
 ENV/
 
 # Data files (too large for git)
-data/scripts/
+data
 data/parsed/
 data/movies.json
-data/features_cache.pkl
+data/ml-25m
+*.pkl
 data/tf-idf
 data/embeddings
 *.bak
@@ -37,3 +38,11 @@ progress.json
 
 # Output files
 *.png
+
+# Evaluation outputs
+structural_eval_results.json
+
+
+*.lock
+pyproj.toml
+.py

@@ -1,38 +1,24 @@
 [project]
-name = "movie-struct-retrieval"
+name = "movie-recommendation"
 version = "0.1.0"
-description = "Movie retrieval system using narrative structure (DTW), social topology (NetLSD), and collaborative filtering (LightGCN)"
-readme = "README.md"
-requires-python = ">=3.11"
+description = "Movie recommendation system based on narrative structure and social topology"
+requires-python = ">=3.10"
 dependencies = [
-    # Scraping
-    "beautifulsoup4>=4.12.0",
-    "lxml>=5.0.0",
-    "requests>=2.31.0",
-    # Feature extraction
-    "numpy>=1.24.0",
-    "networkx>=3.0",
-    "netlsd>=1.0.2",
-    "vaderSentiment>=3.3.2",
-    "scipy>=1.11.0",
-    # Retrieval
-    "fastdtw>=0.3.4",
-    # Recommendation model
-    "torch>=2.0.0",
-    # Utilities
-    "tqdm>=4.65.0",
-    "matplotlib>=3.7.0",
+    "netlsd",
+    "numpy",
+    "networkx",
+    "vaderSentiment",
+    "scipy",
+    "tqdm",
+    "matplotlib",
+    "fastdtw",
+    "torch",
+    "nltk",
+    "requests",
+    "beautifulsoup4",
+    "scikit-learn",
+    "pandas",
 ]
-
-[project.scripts]
-# CLI entry points (use: uv run <command>)
-scrape = "preprocessing.scraper:main"
-parse = "preprocessing.parser:main"
-retrieve = "main:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src", "preprocessing"]
