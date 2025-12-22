@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm import tqdm
 from scipy.stats import ttest_rel
 
@@ -65,6 +66,86 @@ def bootstrap_mean_diff(a, b, n_boot=10000, seed=42):
     return np.percentile(diffs, [2.5, 50, 97.5])
 
 
+def load_script_tfidf(feature_db, cache_path='data/script_tfidf_cache.pkl'):
+    """
+    載入或構建 Script TF-IDF 矩陣
+    Returns: (tfidf_matrix, movie_ids, id_to_idx)
+    """
+    # 嘗試從 cache 載入
+    if os.path.exists(cache_path):
+        print(f"[INFO] Loading script TF-IDF from cache: {cache_path}")
+        with open(cache_path, 'rb') as f:
+            cached = pickle.load(f)
+        movie_ids = cached['movie_ids']
+        tfidf_matrix = cached['matrix']
+        id_to_idx = {mid: i for i, mid in enumerate(movie_ids)}
+        return tfidf_matrix, movie_ids, id_to_idx
+
+    # 從 scripts 資料夾構建
+    scripts_dir = 'data/scripts'
+    movie_ids = []
+    script_texts = []
+
+    print(f"[INFO] Building script TF-IDF matrix from {scripts_dir}...")
+    for mid in tqdm(feature_db.keys(), desc="Loading scripts"):
+        script_path = os.path.join(scripts_dir, f"{mid}.txt")
+        if os.path.exists(script_path):
+            try:
+                with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+                if len(text.strip()) > 100:
+                    movie_ids.append(mid)
+                    script_texts.append(text)
+            except Exception:
+                continue
+
+    if not script_texts:
+        print("[WARN] No script texts found for TF-IDF")
+        return None, [], {}
+
+    print(f"[INFO] Vectorizing {len(script_texts)} scripts...")
+    vectorizer = TfidfVectorizer(
+        stop_words='english',
+        max_features=10000,
+        min_df=2,
+        max_df=0.85,
+        ngram_range=(1, 2)
+    )
+    tfidf_matrix = vectorizer.fit_transform(script_texts)
+
+    # 儲存 cache
+    print(f"[INFO] Saving script TF-IDF cache to: {cache_path}")
+    with open(cache_path, 'wb') as f:
+        pickle.dump({'matrix': tfidf_matrix, 'movie_ids': movie_ids}, f)
+
+    id_to_idx = {mid: i for i, mid in enumerate(movie_ids)}
+    return tfidf_matrix, movie_ids, id_to_idx
+
+
+def tfidf_search(query_id, tfidf_matrix, movie_ids, id_to_idx, top_k=5):
+    """
+    使用 TF-IDF cosine similarity 進行檢索
+    """
+    if query_id not in id_to_idx:
+        return []
+
+    query_idx = id_to_idx[query_id]
+    similarities = cosine_similarity(
+        tfidf_matrix[query_idx],
+        tfidf_matrix
+    ).flatten()
+
+    sorted_indices = np.argsort(similarities)[::-1]
+    results = []
+    for idx in sorted_indices:
+        mid = movie_ids[idx]
+        if mid != query_id:
+            results.append((mid, similarities[idx]))
+        if len(results) >= top_k:
+            break
+    return results
+
+
 def evaluate_genome():
 
     # =========================
@@ -84,6 +165,10 @@ def evaluate_genome():
     genome_matrix_pca = apply_pca(genome_matrix, PCA_DIM)
     retriever = StructRetrieval(feature_db)
 
+    # 載入 TF-IDF
+    print("[INFO] Loading Script TF-IDF...")
+    tfidf_matrix, tfidf_movie_ids, tfidf_id_to_idx = load_script_tfidf(feature_db)
+
     # =========================
     # 2. 篩選測試集
     # =========================
@@ -97,7 +182,7 @@ def evaluate_genome():
     # =========================
     # 3. 評估迴圈
     # =========================
-    metrics = {'Random': [], 'Narrative (DTW)': [], 'Hybrid': []}
+    metrics = {'TF-IDF': [], 'Narrative (DTW)': [], 'Hybrid': []}
 
     for query_id in tqdm(test_samples, desc="計算基因相似度 (PCA)"):
         query_ml_id = id_map[query_id]
@@ -113,9 +198,9 @@ def evaluate_genome():
                         sims.append(cosine_similarity(query_vec, rec_vec)[0][0])
             return np.mean(sims) if sims else 0.0
 
-        # A. Random baseline
-        rand_ids = np.random.choice(test_movies, 5, replace=False)
-        metrics['Random'].append(calc_list_similarity([(rid, 0) for rid in rand_ids]))
+        # A. TF-IDF baseline
+        tfidf_recs = tfidf_search(query_id, tfidf_matrix, tfidf_movie_ids, tfidf_id_to_idx, top_k=5)
+        metrics['TF-IDF'].append(calc_list_similarity(tfidf_recs))
 
         # B. Narrative (DTW)
         recs = retriever.search_by_narrative(query_id, top_k=5)
@@ -134,7 +219,7 @@ def evaluate_genome():
     print("=" * 60)
 
     results = {k: np.mean(v) for k, v in metrics.items()}
-    base_score = results['Random']
+    base_score = results['TF-IDF']
 
     for method, score in results.items():
         lift = (score - base_score) / base_score * 100
@@ -147,16 +232,16 @@ def evaluate_genome():
     print("統計檢定（Paired t-test）")
     print("=" * 60)
 
-    random_scores = np.array(metrics['Random'])
+    tfidf_scores = np.array(metrics['TF-IDF'])
     narrative_scores = np.array(metrics['Narrative (DTW)'])
     hybrid_scores = np.array(metrics['Hybrid'])
 
-    t_nr, p_nr = ttest_rel(narrative_scores, random_scores)
-    t_hr, p_hr = ttest_rel(hybrid_scores, random_scores)
+    t_nt, p_nt = ttest_rel(narrative_scores, tfidf_scores)
+    t_ht, p_ht = ttest_rel(hybrid_scores, tfidf_scores)
     t_nh, p_nh = ttest_rel(narrative_scores, hybrid_scores)
 
-    print(f"Narrative vs Random : t = {t_nr:.3f}, p = {p_nr:.4e}")
-    print(f"Hybrid    vs Random : t = {t_hr:.3f}, p = {p_hr:.4e}")
+    print(f"Narrative vs TF-IDF : t = {t_nt:.3f}, p = {p_nt:.4e}")
+    print(f"Hybrid    vs TF-IDF : t = {t_ht:.3f}, p = {p_ht:.4e}")
     print(f"Narrative vs Hybrid : t = {t_nh:.3f}, p = {p_nh:.4e}")
 
     # =========================
@@ -166,15 +251,17 @@ def evaluate_genome():
     print("Bootstrap 95% 信賴區間（Mean Difference）")
     print("=" * 60)
 
-    ci_nr = bootstrap_mean_diff(narrative_scores, random_scores)
-    ci_hr = bootstrap_mean_diff(hybrid_scores, random_scores)
+    ci_nt = bootstrap_mean_diff(narrative_scores, tfidf_scores)
+    ci_ht = bootstrap_mean_diff(hybrid_scores, tfidf_scores)
 
-    print(f"Narrative - Random : 95% CI = [{ci_nr[0]:.4f}, {ci_nr[2]:.4f}]")
-    print(f"Hybrid    - Random : 95% CI = [{ci_hr[0]:.4f}, {ci_hr[2]:.4f}]")
+    print(f"Narrative - TF-IDF : 95% CI = [{ci_nt[0]:.4f}, {ci_nt[2]:.4f}]")
+    print(f"Hybrid    - TF-IDF : 95% CI = [{ci_ht[0]:.4f}, {ci_ht[2]:.4f}]")
 
     print("-" * 60)
-    if results['Hybrid'] > results['Random']:
-        print("驗證成功：結構相似的電影，其 Tag Genome 分佈顯著高於隨機配對。")
+    if results['Hybrid'] > results['TF-IDF']:
+        print("驗證成功：結構相似的電影，其 Tag Genome 分佈顯著高於 TF-IDF baseline。")
+    else:
+        print("結果：TF-IDF baseline 表現優於或相近於結構方法。")
 
 
 if __name__ == "__main__":
